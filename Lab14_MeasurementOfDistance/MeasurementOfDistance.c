@@ -1,16 +1,18 @@
 // MeasurementOfDistance.c
 // Runs on LM4F120/TM4C123
-// Test the switch initialization functions by setting the LED
-// color according to the status of the switches.
-// Daniel and Jonathan Valvano
-// October 24, 2018
+// Use SysTick interrupts to periodically initiate a software-
+// triggered ADC conversion, convert the sample to a fixed-
+// point decimal distance, and store the result in a mailbox.
+// The foreground thread takes the result from the mailbox,
+// converts the result to a string, and prints it to the
+// Nokia5110 LCD.  The display is optional.
+// January 15, 2016
 
 /* This example accompanies the book
    "Embedded Systems: Introduction to ARM Cortex M Microcontrollers",
-   ISBN: 978-1469998749, Jonathan Valvano, copyright (c) 2013
-   Section 4.2    Program 4.1
+   ISBN: 978-1469998749, Jonathan Valvano, copyright (c) 2015
 
- Copyright 2013 by Jonathan W. Valvano, valvano@mail.utexas.edu
+ Copyright 2016 by Jonathan W. Valvano, valvano@mail.utexas.edu
     You may use, edit, run or distribute this file
     as long as the above copyright notice remains
  THIS SOFTWARE IS PROVIDED "AS IS".  NO WARRANTIES, WHETHER EXPRESS, IMPLIED
@@ -22,138 +24,61 @@
  http://users.ece.utexas.edu/~valvano/
  */
 
-// negative logic switches connected to PF0 and PF4 on the Launchpad
-// red LED connected to PF1 on the Launchpad
-// blue LED connected to PF2 on the Launchpad
-// green LED connected to PF3 on the Launchpad
-// NOTE: The NMI (non-maskable interrupt) is on PF0.  That means that
-// the Alternate Function Select, Pull-Up Resistor, Pull-Down Resistor,
-// and Digital Enable are all locked for PF0 until a value of 0x4C4F434B
-// is written to the Port F GPIO Lock Register.  After Port F is
-// unlocked, bit 0 of the Port F GPIO Commit Register must be set to
-// allow access to PF0's control registers.  On the LM4F120, the other
-// bits of the Port F GPIO Commit Register are hard-wired to 1, meaning
-// that the rest of Port F can always be freely re-configured at any
-// time.  Requiring this procedure makes it unlikely to accidentally
-// re-configure the JTAG pins as GPIO, which can lock the debugger out
-// of the processor and make it permanently unable to be debugged or
-// re-programmed.
+// Slide pot pin 3 connected to +3.3V
+// Slide pot pin 2 connected to PE2(Ain1) and PD3
+// Slide pot pin 1 connected to ground
 
-#include <stdint.h>
-#include <math.h>
-#include "tm4c123gh6pm.h"
+
+#include "ADC.h"
 #include "PLL.h"
+#include <math.h>
+#include <stdint.h>
+#include "..//tm4c123gh6pm.h"
 #include "Nokia5110.h"
+#include "TExaS.h"
 
-
-#define GPIO_LOCK_KEY           0x4C4F434B  // Unlocks the GPIO_CR register
-#define PF0       (*((volatile uint32_t *)0x40025004))
-#define PF4       (*((volatile uint32_t *)0x40025040))
-#define SWITCHES  (*((volatile uint32_t *)0x40025044))
-#define SW1       0x01                      // on the left side of the Launchpad board
-#define SW2       0x10                      // on the right side of the Launchpad board
-#define SYSCTL_RCGC2_GPIOF      0x00000020  // port F Clock Gating Control
-#define SYSCTL_RCGC2_GPIOB			0x00000002	// port B Clock Gating Control
-#define SYSCTL_TCGC2_FPIOA			0x00000001	// port A Clock Gating Control
-#define RED       0x02
-#define BLUE      0x04
-#define GREEN     0x08
+void EnableInterrupts(void);  // Enable interrupts
+void SysTick_Init(unsigned long);
+unsigned char String[10]; // null-terminated ASCII string
+unsigned long Distance;   // units 0.001 cm
+unsigned long ADCdata;    // 12-bit 0 to 4095 sample
+unsigned long Flag;       // 1 means valid Distance, 0 means Distance is empty
+void Delay(unsigned long ulCount);
 
 // global variable and arrays
 volatile unsigned long ADCvalue;
-volatile unsigned long ADC_V;
-uint16_t calc_distance;
+int calc_distance;
 uint16_t adcTable[] = {3333, 2333, 1633, 1332, 1108, 1012, 909, 809, 738, 692, 650, 629, 586};
 uint16_t distTable[] = {10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70};
 uint16_t table_dist;
 
-
-void ADC_InitSeq3Ch9(void);
-uint32_t ADC0_InSeq3(void);
-void Systick_Inter_Init(void);
-void Delay(unsigned long ulCount);
-void SysTick_Handler(void);
-float Convert(float sample);
-
-int main(void){
-	PLL_Init();														// initialize PLL for 50MHz
-	ADC_InitSeq3Ch9();										// initialize ADC 0 Seq 3 Channel 9
-	Nokia5110_Init();											// initialize the nokia display
-  Nokia5110_Clear();										// clear the nokia screen
-  Nokia5110_OutChar(127);               // print UT sign
-	Systick_Inter_Init();									// initialize system tick for 20Hz, 50ms
-	while(1){
-		Nokia5110_SetCursor(1, 0); 					// one leading spaces, first row
-		Nokia5110_OutString("ADC : ");
-		Nokia5110_OutUDec(ADCvalue);
-		Nokia5110_OutString("V : ");
-		Nokia5110_OutUDec(Convert(ADCvalue));		
-		Nokia5110_SetCursor(1, 2);          // one leading spaces, second row
-		Nokia5110_OutString("Calc: ");
-		Nokia5110_OutUDec(calc_distance);
-		Nokia5110_SetCursor(1, 3);          // one leading spaces, third row
-		Nokia5110_OutString("Table:");
-		Nokia5110_OutUDec(table_dist);                    
-    Delay(833333);                     
-	}
+//********Convert****************
+// Convert a 12-bit binary ADC sample into a 32-bit unsigned
+// fixed-point distance (resolution 0.001 cm).  Calibration
+// data is gathered using known distances and reading the
+// ADC value measured on PE1.  
+// Overflow and dropout should be considered 
+// Input: sample  12-bit ADC sample
+// Output: 32-bit distance (resolution 0.001cm)
+unsigned long Convert(unsigned long sample){
 	
-}
-float Convert(float sample){
-	
-  return sample/4095.0* 3.3;  // replace this line with real code
-}
-void ADC_InitSeq3Ch9(void){
-	volatile unsigned long delay;
-	SYSCTL_RCGCGPIO_R |= 0x10;        // 1) activate Port E clock
-	while((SYSCTL_PRGPIO_R & 0x10) == 0);
-	GPIO_PORTE_DIR_R &= ~0x10;				// 2) make PE4 input
-	GPIO_PORTE_AFSEL_R |= 0x10;				// 3) enable alternate function of PE4
-	GPIO_PORTE_DEN_R &= ~0x10;				// 4) disable PE4 digital I/O
-	GPIO_PORTE_AMSEL_R |= 0x10;				// 5) enable analog function on PE4
-	SYSCTL_RCGCADC_R |= 0x01;					// 6) activate ADC0
-	delay = SYSCTL_RCGCADC_R;
-	delay = SYSCTL_RCGCADC_R;
-	delay = SYSCTL_RCGCADC_R;
-	delay = SYSCTL_RCGCADC_R;
-	ADC0_PC_R = 0x01;									// 7) configure for 125k sample rate
-	ADC0_SSPRI_R = 0x0123; 						// 8) Seq 3 is highest priority
-	ADC0_ACTSS_R &= ~0x008;							// 9) disable sample seq 3;
-	ADC0_EMUX_R &= ~0xF000;						// 10) seq3 is software trigger
-	ADC0_SSMUX3_R = (ADC0_SSMUX3_R & 0xFFFFFFF0) // 11) clear SS3 field
-										+9; 
-	ADC0_SSCTL3_R = 0x0006;						// 12) no TS0 D0, yes IE0 END0
-	ADC0_IM_R &= ~0x0008;							// 13) disable SS3 interrupt
-	ADC0_ACTSS_R |= 0x0008;						// 14) enable sample sequencer 3
+  return 4095 * sample / 3.3;  // replace this line with real code
 }
 
-uint32_t ADC0_InSeq3(void){
-	uint32_t result;									// initializing a variable name
-	ADC0_PSSI_R = 0x0008;							// set the flag for ADC0 seq 3
-	while((ADC0_RIS_R & 0x08) == 0);	// waiting for the flag to be high
-	result = ADC0_SSFIFO3_R & 0xFFF;	// gives the value from the sample
-	ADC0_ISC_R = 0x0008;							// reset the flag for ADC0 seq 3
-	return result;										// return result of the sequance
+// Initialize SysTick interrupts to trigger at 40 Hz, 25 ms
+void SysTick_Init(unsigned long period){
+	NVIC_ST_CTRL_R = 0;
+	NVIC_ST_RELOAD_R = period -1;
+	NVIC_ST_CURRENT_R = 0;
+	NVIC_SYS_PRI3_R = 0x00000007;
 }
-
-void Systick_Inter_Init(void){
-	NVIC_ST_CTRL_R = 0;								// disable systick for setup
-	NVIC_ST_RELOAD_R = 2500000;						// set the load for 20Hz,50ms
-	NVIC_SYS_PRI3_R = 1 <<29;					// set the priority to level to 3
-	NVIC_ST_CTRL_R = 7;								// enable count down, interrupt, systick
-}
-
-//  function delays 3*ulCount cycles
-void Delay(unsigned long ulCount){
-  do{
-    ulCount--;
-	}while(ulCount);
-}
-
+// executes every 25 ms, collects a sample, converts and stores in mailbox
 void SysTick_Handler(void){
-	int8_t i;
+	
+	int i;
 	uint8_t indexL = 0;
 	uint8_t indexH = 12;
-	ADCvalue = ADC0_InSeq3();											// receiving the ADC value from the sensor
+	ADCvalue = ADC0_In();											// receiving the ADC value from the sensor
 	calc_distance = pow(ADCvalue,-1.207) * 155876;// equation to find the distance
 	for(i=0; i < 13; i++){												// finding the closest lowest value of ADC value
 		if(ADCvalue < adcTable[i])
@@ -172,5 +97,85 @@ void SysTick_Handler(void){
 		table_dist = distTable[indexL];
 	else if((calc_distance - distTable[indexL]) > (distTable[indexH] - calc_distance))
 		table_dist = distTable[indexH];
+
+}
+
+//-----------------------UART_ConvertDistance-----------------------
+// Converts a 32-bit distance into an ASCII string
+// Input: 32-bit number to be converted (resolution 0.001cm)
+// Output: store the conversion in global variable String[10]
+// Fixed format 1 digit, point, 3 digits, space, units, null termination
+// Examples
+//    4 to "0.004 cm"  
+//   31 to "0.031 cm" 
+//  102 to "0.102 cm" 
+// 2210 to "2.210 cm"
+//10000 to "*.*** cm"  any value larger than 9999 converted to "*.*** cm"
+void UART_ConvertDistance(unsigned long n){
+// as part of Lab 11 you implemented this function
+// string for the ASCII	String[10];
+
+}
+
+/*
+// main1 is a simple main program allowing you to debug the ADC interface
+int main1(void){ 
+  TExaS_Init(ADC0_AIN1_PIN_PE2, SSI0_Real_Nokia5110_Scope);
+  ADC0_Init();    // initialize ADC0, channel 1, sequencer 3
+  EnableInterrupts();
+  while(1){ 
+    ADCdata = ADC0_In();
+  }
+}
+// once the ADC is operational, you can use main2 to debug the convert to distance
+int main2(void){ 
+  TExaS_Init(ADC0_AIN1_PIN_PE2, SSI0_Real_Nokia5110_NoScope);
+  ADC0_Init();    // initialize ADC0, channel 1, sequencer 3
+  Nokia5110_Init();             // initialize Nokia5110 LCD
+  EnableInterrupts();
+  while(1){ 
+    ADCdata = ADC0_In();
+    Nokia5110_SetCursor(0, 0);
+    Distance = Convert(ADCdata);
+    UART_ConvertDistance(Distance); // from Lab 11
+    Nokia5110_OutString(String);    // output to Nokia5110 LCD (optional)
+  }
+}
+*/
+// once the ADC and convert to distance functions are operational,
+// you should use this main to build the final solution with interrupts and mailbox
+int main(void){ 
+  volatile unsigned long delay;
+  //TExaS_Init(ADC0_AIN1_PIN_PE2, SSI0_Real_Nokia5110_Scope); 
+	PLL_Init();
+// initialize ADC0, channel 1, sequencer 3
+	ADC0_Init();
+
+  EnableInterrupts();
+	Nokia5110_Init();											// initialize the nokia display
+  Nokia5110_Clear();										// clear the nokia screen
+  Nokia5110_OutChar(127);               // print UT sign
+	SysTick_Init(2500000);									// initialize system tick for 20Hz, 50ms
+	
+	while(1){
+		
+		Nokia5110_SetCursor(1, 0); 					// one leading spaces, first row
+		Nokia5110_OutString("ADC : ");
+		Nokia5110_OutUDec(ADCvalue);
+		Nokia5110_SetCursor(1, 1);          // one leading spaces, second row
+		Nokia5110_OutString("Dist: ");
+		Nokia5110_OutUDec(calc_distance);
+		Nokia5110_SetCursor(1, 2);          // one leading spaces, third row
+		Nokia5110_OutString("TD   :");
+		Nokia5110_OutUDec(table_dist);                    
+    Delay(833333);                     
+	}
+}
+
+//  function delays 3*ulCount cycles
+void Delay(unsigned long ulCount){
+  do{
+    ulCount--;
+	}while(ulCount);
 }
 

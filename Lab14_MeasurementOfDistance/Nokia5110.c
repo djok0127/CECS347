@@ -28,9 +28,31 @@
  http://users.ece.utexas.edu/~valvano/
  */
 
+// Blue Nokia 5110
+// ---------------
+// Signal        (Nokia 5110) LaunchPad pin
+// Reset         (RST, pin 1) connected to PA7
+// SSI0Fss       (CE,  pin 2) connected to PA3
+// Data/Command  (DC,  pin 3) connected to PA6
+// SSI0Tx        (Din, pin 4) connected to PA5
+// SSI0Clk       (Clk, pin 5) connected to PA2
+// 3.3V          (Vcc, pin 6) power
+// back light    (BL,  pin 7) not connected, consists of 4 white LEDs which draw ~80mA total
+// Ground        (Gnd, pin 8) ground
+
+// Red SparkFun Nokia 5110 (LCD-10168)
+// -----------------------------------
+// Signal        (Nokia 5110) LaunchPad pin
+// 3.3V          (VCC, pin 1) power
+// Ground        (GND, pin 2) ground
+// SSI0Fss       (SCE, pin 3) connected to PA3
+// Reset         (RST, pin 4) connected to PA7
+// Data/Command  (D/C, pin 5) connected to PA6
+// SSI0Tx        (DN,  pin 6) connected to PA5
+// SSI0Clk       (SCLK, pin 7) connected to PA2
+// back light    (LED, pin 8) not connected, consists of 4 white LEDs which draw ~80mA total
 
 #include "Nokia5110.h"
-#include "tm4c123gh6pm.h"
 
 #define DC                      (*((volatile unsigned long *)0x40004100))
 #define DC_COMMAND              0
@@ -38,7 +60,38 @@
 #define RESET                   (*((volatile unsigned long *)0x40004200))
 #define RESET_LOW               0
 #define RESET_HIGH              0x80
-
+#define GPIO_PORTA_DIR_R        (*((volatile unsigned long *)0x40004400))
+#define GPIO_PORTA_AFSEL_R      (*((volatile unsigned long *)0x40004420))
+#define GPIO_PORTA_DEN_R        (*((volatile unsigned long *)0x4000451C))
+#define GPIO_PORTA_AMSEL_R      (*((volatile unsigned long *)0x40004528))
+#define GPIO_PORTA_PCTL_R       (*((volatile unsigned long *)0x4000452C))
+#define SSI0_CR0_R              (*((volatile unsigned long *)0x40008000))
+#define SSI0_CR1_R              (*((volatile unsigned long *)0x40008004))
+#define SSI0_DR_R               (*((volatile unsigned long *)0x40008008))
+#define SSI0_SR_R               (*((volatile unsigned long *)0x4000800C))
+#define SSI0_CPSR_R             (*((volatile unsigned long *)0x40008010))
+#define SSI0_CC_R               (*((volatile unsigned long *)0x40008FC8))
+#define SSI_CR0_SCR_M           0x0000FF00  // SSI Serial Clock Rate
+#define SSI_CR0_SPH             0x00000080  // SSI Serial Clock Phase
+#define SSI_CR0_SPO             0x00000040  // SSI Serial Clock Polarity
+#define SSI_CR0_FRF_M           0x00000030  // SSI Frame Format Select
+#define SSI_CR0_FRF_MOTO        0x00000000  // Freescale SPI Frame Format
+#define SSI_CR0_DSS_M           0x0000000F  // SSI Data Size Select
+#define SSI_CR0_DSS_8           0x00000007  // 8-bit data
+#define SSI_CR1_MS              0x00000004  // SSI Master/Slave Select
+#define SSI_CR1_SSE             0x00000002  // SSI Synchronous Serial Port
+                                            // Enable
+#define SSI_SR_BSY              0x00000010  // SSI Busy Bit
+#define SSI_SR_TNF              0x00000002  // SSI Transmit FIFO Not Full
+#define SSI_CPSR_CPSDVSR_M      0x000000FF  // SSI Clock Prescale Divisor
+#define SSI_CC_CS_M             0x0000000F  // SSI Baud Clock Source
+#define SSI_CC_CS_SYSPLL        0x00000000  // Either the system clock (if the
+                                            // PLL bypass is in effect) or the
+                                            // PLL output (default)
+#define SYSCTL_RCGC1_R          (*((volatile unsigned long *)0x400FE104))
+#define SYSCTL_RCGC2_R          (*((volatile unsigned long *)0x400FE108))
+#define SYSCTL_RCGC1_SSI0       0x00000010  // SSI0 Clock Gating Control
+#define SYSCTL_RCGC2_GPIOA      0x00000001  // port A Clock Gating Control
 
 enum typeOfWrite{
   COMMAND,                              // the transmission is an LCD command

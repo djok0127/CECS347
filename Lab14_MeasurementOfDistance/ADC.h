@@ -21,7 +21,7 @@
  For more information about my classes, my research, and my books, see
  http://users.ece.utexas.edu/~valvano/
  */
-
+#include "stdint.h"
 
 // This initialization function sets up the ADC 
 // Max sample rate: <=125,000 samples/second
@@ -36,4 +36,4 @@ void ADC0_Init(void);
 // Busy-wait Analog to digital conversion
 // Input: none
 // Output: 12-bit result of ADC conversion
-unsigned long ADC0_In(void);
+uint32_t ADC0_In(void);
